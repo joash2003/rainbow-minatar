@@ -13,6 +13,13 @@ uv run python dqn.py --game breakout
 
 Games: `breakout`, `asterix`, `freeway`, `seaquest`, `space_invaders`.
 
+Component flags: `--double`, `--dueling`, `--per`, `--c51`. Run the full ablation
+sweep (each variant, 3 seeds, in parallel across cores):
+
+```
+uv run python run_all.py --jobs 6
+```
+
 Logs go to `runs/<name>`. View with `uv run tensorboard --logdir runs`.
 
 ## Notes
@@ -38,7 +45,7 @@ seeds (`assets/learning_curves.png`).
 - [ ] Double DQN — implemented (`--double`), not yet benchmarked
 - [ ] Dueling network — implemented (`--dueling`), not yet benchmarked
 - [ ] Prioritized experience replay — implemented (`--per`), not yet benchmarked
-- [ ] C51 (distributional)
+- [ ] C51 (distributional) — implemented (`--c51`), not yet benchmarked
 
 Each component is added on its own, evaluated over multiple seeds against the
 previous baseline, and written up.

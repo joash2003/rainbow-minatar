@@ -31,6 +31,10 @@ def parse_args():
     p.add_argument("--per", action="store_true")
     p.add_argument("--per-alpha", type=float, default=0.6)
     p.add_argument("--per-beta", type=float, default=0.4)
+    p.add_argument("--c51", action="store_true")
+    p.add_argument("--num-atoms", type=int, default=51)
+    p.add_argument("--v-min", type=float, default=0.0)
+    p.add_argument("--v-max", type=float, default=100.0)
     p.add_argument("--threads", type=int, default=1)
     p.add_argument("--device", default="cpu")
     p.add_argument("--log-name", default=None)
@@ -58,6 +62,22 @@ class QNetwork(nn.Module):
             a = self.advantage(x)
             return v + a - a.mean(1, keepdim=True)
         return self.head(x)
+
+
+class CategoricalQNetwork(nn.Module):
+    def __init__(self, in_channels, num_actions, num_atoms):
+        super().__init__()
+        self.num_actions = num_actions
+        self.num_atoms = num_atoms
+        self.conv = nn.Conv2d(in_channels, 16, kernel_size=3, stride=1)
+        conv_out = 8 * 8 * 16
+        self.fc = nn.Linear(conv_out, 128)
+        self.head = nn.Linear(128, num_actions * num_atoms)
+
+    def forward(self, x):
+        x = F.relu(self.conv(x))
+        x = F.relu(self.fc(x.reshape(x.size(0), -1)))
+        return self.head(x).view(-1, self.num_actions, self.num_atoms)
 
 
 class ReplayBuffer:
@@ -184,6 +204,8 @@ def main():
         parts.append("double")
     if args.per:
         parts.append("per")
+    if args.c51:
+        parts.append("c51")
     parts.append("dqn")
     algo = "_".join(parts)
     run_name = args.log_name or f"{algo}_{args.game}_seed{args.seed}"
@@ -193,8 +215,14 @@ def main():
     in_channels = env.state_shape()[2]
     num_actions = env.num_actions()
 
-    q_net = QNetwork(in_channels, num_actions, args.dueling).to(device)
-    target_net = QNetwork(in_channels, num_actions, args.dueling).to(device)
+    if args.c51:
+        q_net = CategoricalQNetwork(in_channels, num_actions, args.num_atoms).to(device)
+        target_net = CategoricalQNetwork(in_channels, num_actions, args.num_atoms).to(device)
+        support = torch.linspace(args.v_min, args.v_max, args.num_atoms).to(device)
+        delta_z = (args.v_max - args.v_min) / (args.num_atoms - 1)
+    else:
+        q_net = QNetwork(in_channels, num_actions, args.dueling).to(device)
+        target_net = QNetwork(in_channels, num_actions, args.dueling).to(device)
     target_net.load_state_dict(q_net.state_dict())
     optimizer = torch.optim.RMSprop(q_net.parameters(), lr=args.lr, alpha=0.95, centered=True, eps=0.01)
 
@@ -217,7 +245,11 @@ def main():
             action = random.randrange(num_actions)
         else:
             with torch.no_grad():
-                q = q_net(torch.from_numpy(state).unsqueeze(0).to(device))
+                st = torch.from_numpy(state).unsqueeze(0).to(device)
+                if args.c51:
+                    q = (F.softmax(q_net(st), dim=2) * support).sum(2)
+                else:
+                    q = q_net(st)
                 action = int(q.argmax(1).item())
 
         reward, done = env.act(action)
@@ -248,28 +280,55 @@ def main():
             ns = torch.from_numpy(ns).to(device)
             d = torch.from_numpy(d).to(device)
 
-            with torch.no_grad():
-                if args.double:
-                    next_actions = q_net(ns).argmax(1, keepdim=True)
-                    target_q = target_net(ns).gather(1, next_actions).squeeze(1)
-                else:
-                    target_q = target_net(ns).max(1)[0]
-                y = r + args.gamma * (1.0 - d) * target_q
-            q_pred = q_net(s).gather(1, a.unsqueeze(1)).squeeze(1)
+            bs = args.batch_size
+            if args.c51:
+                with torch.no_grad():
+                    next_probs = F.softmax(target_net(ns), dim=2)
+                    if args.double:
+                        next_a = (F.softmax(q_net(ns), dim=2) * support).sum(2).argmax(1)
+                    else:
+                        next_a = (next_probs * support).sum(2).argmax(1)
+                    next_dist = next_probs[torch.arange(bs), next_a]
+                    Tz = r.unsqueeze(1) + args.gamma * (1.0 - d).unsqueeze(1) * support.unsqueeze(0)
+                    Tz = Tz.clamp(args.v_min, args.v_max)
+                    b = (Tz - args.v_min) / delta_z
+                    lo = b.floor().long()
+                    hi = b.ceil().long()
+                    lo[(hi > 0) & (lo == hi)] -= 1
+                    hi[(lo < args.num_atoms - 1) & (lo == hi)] += 1
+                    m = torch.zeros(bs, args.num_atoms, device=device)
+                    offset = (torch.arange(bs, device=device) * args.num_atoms).unsqueeze(1)
+                    m.view(-1).index_add_(0, (lo + offset).view(-1), (next_dist * (hi.float() - b)).view(-1))
+                    m.view(-1).index_add_(0, (hi + offset).view(-1), (next_dist * (b - lo.float())).view(-1))
+                log_p = F.log_softmax(q_net(s), dim=2)[torch.arange(bs), a]
+                loss_each = -(m * log_p).sum(1)
+                if args.per:
+                    priority = loss_each.detach().cpu().numpy()
+            else:
+                with torch.no_grad():
+                    if args.double:
+                        next_actions = q_net(ns).argmax(1, keepdim=True)
+                        target_q = target_net(ns).gather(1, next_actions).squeeze(1)
+                    else:
+                        target_q = target_net(ns).max(1)[0]
+                    y = r + args.gamma * (1.0 - d) * target_q
+                q_pred = q_net(s).gather(1, a.unsqueeze(1)).squeeze(1)
+                loss_each = F.smooth_l1_loss(q_pred, y, reduction="none")
+                if args.per:
+                    priority = (y - q_pred).detach().abs().cpu().numpy()
 
             if args.per:
                 w_t = torch.from_numpy(w).to(device)
-                loss = (w_t * F.smooth_l1_loss(q_pred, y, reduction="none")).mean()
+                loss = (w_t * loss_each).mean()
             else:
-                loss = F.smooth_l1_loss(q_pred, y)
+                loss = loss_each.mean()
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
             if args.per:
-                td = (y - q_pred).detach().abs().cpu().numpy()
-                buffer.update_priorities(idx, td + 1e-6)
+                buffer.update_priorities(idx, priority + 1e-6)
 
             if frame % args.target_update == 0:
                 target_net.load_state_dict(q_net.state_dict())
