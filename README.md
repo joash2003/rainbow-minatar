@@ -23,10 +23,19 @@ Logs go to `runs/<name>`. View with `uv run tensorboard --logdir runs`.
 - Architecture and hyperparameters follow the MinAtar paper (Young & Tian, 2019)
   so results are comparable to the reference DQN.
 
+## Results
+
+`uv run python aggregate.py` overlays each variant as a mean ± std band across
+seeds (`assets/learning_curves.png`).
+
+| Variant | Breakout (3 seeds, 5M frames) |
+|---------|-------------------------------|
+| DQN     | 9.23 ± 0.13                   |
+
 ## Roadmap
 
 - [x] DQN baseline
-- [ ] Double DQN
+- [ ] Double DQN — implemented (`--double`), not yet benchmarked
 - [ ] Dueling network
 - [ ] Prioritized experience replay
 - [ ] C51 (distributional)

@@ -26,6 +26,7 @@ def parse_args():
     p.add_argument("--eps-start", type=float, default=1.0)
     p.add_argument("--eps-end", type=float, default=0.1)
     p.add_argument("--eps-decay-frames", type=int, default=100_000)
+    p.add_argument("--double", action="store_true")
     p.add_argument("--device", default="cpu")
     p.add_argument("--log-name", default=None)
     return p.parse_args()
@@ -89,7 +90,8 @@ def main():
     torch.manual_seed(args.seed)
 
     device = torch.device(args.device if args.device != "mps" or torch.backends.mps.is_available() else "cpu")
-    run_name = args.log_name or f"dqn_{args.game}_seed{args.seed}"
+    algo = "ddqn" if args.double else "dqn"
+    run_name = args.log_name or f"{algo}_{args.game}_seed{args.seed}"
     writer = SummaryWriter(f"runs/{run_name}")
 
     env = Environment(args.game)
@@ -145,7 +147,11 @@ def main():
             d = torch.from_numpy(d).to(device)
 
             with torch.no_grad():
-                target_q = target_net(ns).max(1)[0]
+                if args.double:
+                    next_actions = q_net(ns).argmax(1, keepdim=True)
+                    target_q = target_net(ns).gather(1, next_actions).squeeze(1)
+                else:
+                    target_q = target_net(ns).max(1)[0]
                 y = r + args.gamma * (1.0 - d) * target_q
             q_pred = q_net(s).gather(1, a.unsqueeze(1)).squeeze(1)
             loss = F.smooth_l1_loss(q_pred, y)
