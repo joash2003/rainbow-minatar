@@ -27,6 +27,7 @@ def parse_args():
     p.add_argument("--eps-end", type=float, default=0.1)
     p.add_argument("--eps-decay-frames", type=int, default=100_000)
     p.add_argument("--double", action="store_true")
+    p.add_argument("--threads", type=int, default=1)
     p.add_argument("--device", default="cpu")
     p.add_argument("--log-name", default=None)
     return p.parse_args()
@@ -88,6 +89,7 @@ def main():
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
+    torch.set_num_threads(args.threads)
 
     device = torch.device(args.device if args.device != "mps" or torch.backends.mps.is_available() else "cpu")
     algo = "ddqn" if args.double else "dqn"
