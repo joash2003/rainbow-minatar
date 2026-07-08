@@ -36,7 +36,7 @@ seeds (`assets/learning_curves.png`).
 
 - [x] DQN baseline
 - [ ] Double DQN — implemented (`--double`), not yet benchmarked
-- [ ] Dueling network
+- [ ] Dueling network — implemented (`--dueling`), not yet benchmarked
 - [ ] Prioritized experience replay
 - [ ] C51 (distributional)
 

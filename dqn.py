@@ -27,6 +27,7 @@ def parse_args():
     p.add_argument("--eps-end", type=float, default=0.1)
     p.add_argument("--eps-decay-frames", type=int, default=100_000)
     p.add_argument("--double", action="store_true")
+    p.add_argument("--dueling", action="store_true")
     p.add_argument("--threads", type=int, default=1)
     p.add_argument("--device", default="cpu")
     p.add_argument("--log-name", default=None)
@@ -34,16 +35,25 @@ def parse_args():
 
 
 class QNetwork(nn.Module):
-    def __init__(self, in_channels, num_actions):
+    def __init__(self, in_channels, num_actions, dueling=False):
         super().__init__()
+        self.dueling = dueling
         self.conv = nn.Conv2d(in_channels, 16, kernel_size=3, stride=1)
         conv_out = 8 * 8 * 16
         self.fc = nn.Linear(conv_out, 128)
-        self.head = nn.Linear(128, num_actions)
+        if dueling:
+            self.value = nn.Linear(128, 1)
+            self.advantage = nn.Linear(128, num_actions)
+        else:
+            self.head = nn.Linear(128, num_actions)
 
     def forward(self, x):
         x = F.relu(self.conv(x))
         x = F.relu(self.fc(x.reshape(x.size(0), -1)))
+        if self.dueling:
+            v = self.value(x)
+            a = self.advantage(x)
+            return v + a - a.mean(1, keepdim=True)
         return self.head(x)
 
 
@@ -92,7 +102,13 @@ def main():
     torch.set_num_threads(args.threads)
 
     device = torch.device(args.device if args.device != "mps" or torch.backends.mps.is_available() else "cpu")
-    algo = "ddqn" if args.double else "dqn"
+    parts = []
+    if args.dueling:
+        parts.append("dueling")
+    if args.double:
+        parts.append("double")
+    parts.append("dqn")
+    algo = "_".join(parts)
     run_name = args.log_name or f"{algo}_{args.game}_seed{args.seed}"
     writer = SummaryWriter(f"runs/{run_name}")
 
@@ -100,8 +116,8 @@ def main():
     in_channels = env.state_shape()[2]
     num_actions = env.num_actions()
 
-    q_net = QNetwork(in_channels, num_actions).to(device)
-    target_net = QNetwork(in_channels, num_actions).to(device)
+    q_net = QNetwork(in_channels, num_actions, args.dueling).to(device)
+    target_net = QNetwork(in_channels, num_actions, args.dueling).to(device)
     target_net.load_state_dict(q_net.state_dict())
     optimizer = torch.optim.RMSprop(q_net.parameters(), lr=args.lr, alpha=0.95, centered=True, eps=0.01)
 

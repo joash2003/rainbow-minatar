@@ -11,6 +11,7 @@ SEEDS = [1, 2, 3]
 VARIANTS = [
     ("dqn", []),
     ("ddqn", ["--double"]),
+    ("dueling", ["--dueling"]),
 ]
 
 
