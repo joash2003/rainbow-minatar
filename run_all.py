@@ -12,6 +12,7 @@ VARIANTS = [
     ("dqn", []),
     ("ddqn", ["--double"]),
     ("dueling", ["--dueling"]),
+    ("per", ["--per"]),
 ]
 
 
