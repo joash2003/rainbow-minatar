@@ -12,3 +12,4 @@ wheels/
 runs/
 __pycache__/
 *.pt
+*.log
