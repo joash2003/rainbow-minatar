@@ -21,7 +21,7 @@ def run_one(name, flags, seed, frames):
     log = f"{name}_{GAME}_seed{seed}"
     if os.path.exists(os.path.join("runs", log, "model.pt")):
         return f"skip {log} (already done)"
-    cmd = [sys.executable, "dqn.py", "--game", GAME, "--seed", str(seed), "--log-name", log] + flags
+    cmd = [sys.executable, "dqn.py", "--game", GAME, "--seed", str(seed), "--log-name", log, "--resume"] + flags
     if frames:
         cmd += ["--frames", str(frames)]
     with open(f"{log}.log", "w") as fh:

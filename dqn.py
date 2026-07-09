@@ -1,4 +1,5 @@
 import argparse
+import os
 import random
 import time
 from collections import deque
@@ -38,6 +39,8 @@ def parse_args():
     p.add_argument("--threads", type=int, default=1)
     p.add_argument("--device", default="cpu")
     p.add_argument("--log-name", default=None)
+    p.add_argument("--resume", action="store_true")
+    p.add_argument("--ckpt-freq", type=int, default=250_000)
     return p.parse_args()
 
 
@@ -83,8 +86,8 @@ class CategoricalQNetwork(nn.Module):
 class ReplayBuffer:
     def __init__(self, capacity, state_shape):
         self.capacity = capacity
-        self.states = np.zeros((capacity, *state_shape), dtype=np.float32)
-        self.next_states = np.zeros((capacity, *state_shape), dtype=np.float32)
+        self.states = np.zeros((capacity, *state_shape), dtype=np.uint8)
+        self.next_states = np.zeros((capacity, *state_shape), dtype=np.uint8)
         self.actions = np.zeros(capacity, dtype=np.int64)
         self.rewards = np.zeros(capacity, dtype=np.float32)
         self.dones = np.zeros(capacity, dtype=np.float32)
@@ -104,10 +107,10 @@ class ReplayBuffer:
     def sample(self, batch_size):
         idx = np.random.randint(0, self.size, size=batch_size)
         return (
-            self.states[idx],
+            self.states[idx].astype(np.float32),
             self.actions[idx],
             self.rewards[idx],
-            self.next_states[idx],
+            self.next_states[idx].astype(np.float32),
             self.dones[idx],
         )
 
@@ -144,8 +147,8 @@ class PrioritizedReplayBuffer:
     def __init__(self, capacity, state_shape, alpha=0.6):
         self.capacity = capacity
         self.alpha = alpha
-        self.states = np.zeros((capacity, *state_shape), dtype=np.float32)
-        self.next_states = np.zeros((capacity, *state_shape), dtype=np.float32)
+        self.states = np.zeros((capacity, *state_shape), dtype=np.uint8)
+        self.next_states = np.zeros((capacity, *state_shape), dtype=np.uint8)
         self.actions = np.zeros(capacity, dtype=np.int64)
         self.rewards = np.zeros(capacity, dtype=np.float32)
         self.dones = np.zeros(capacity, dtype=np.float32)
@@ -175,8 +178,8 @@ class PrioritizedReplayBuffer:
         probs = self.tree.tree[idx + self.capacity - 1] / total
         weights = (self.size * probs) ** (-beta)
         weights /= weights.max()
-        return (self.states[idx], self.actions[idx], self.rewards[idx],
-                self.next_states[idx], self.dones[idx], idx, weights.astype(np.float32))
+        return (self.states[idx].astype(np.float32), self.actions[idx], self.rewards[idx],
+                self.next_states[idx].astype(np.float32), self.dones[idx], idx, weights.astype(np.float32))
 
     def update_priorities(self, idx, priorities):
         for i, p in zip(idx, priorities):
@@ -212,6 +215,8 @@ def main():
     writer = SummaryWriter(f"runs/{run_name}")
 
     env = Environment(args.game)
+    env.random = np.random.RandomState(args.seed)
+    env.env.random = np.random.RandomState(args.seed + 10_000)
     in_channels = env.state_shape()[2]
     num_actions = env.num_actions()
 
@@ -236,9 +241,20 @@ def main():
     episode_return = 0.0
     returns = deque(maxlen=100)
     episode = 0
+    start_frame = 1
+    ckpt_path = f"runs/{run_name}/ckpt.pt"
+    if args.resume and os.path.exists(ckpt_path):
+        ck = torch.load(ckpt_path, map_location=device, weights_only=False)
+        q_net.load_state_dict(ck["q_net"])
+        target_net.load_state_dict(ck["target_net"])
+        optimizer.load_state_dict(ck["optimizer"])
+        returns = deque(ck["returns"], maxlen=100)
+        episode = ck["episode"]
+        start_frame = ck["frame"] + 1
+        print(f"resumed from frame {ck['frame']}")
     start = time.time()
 
-    for frame in range(1, args.frames + 1):
+    for frame in range(start_frame, args.frames + 1):
         eps = max(args.eps_end, args.eps_start - (args.eps_start - args.eps_end) * frame / args.eps_decay_frames)
 
         if random.random() < eps:
@@ -334,13 +350,22 @@ def main():
                 target_net.load_state_dict(q_net.state_dict())
 
         if frame % 10_000 == 0:
-            fps = int(frame / (time.time() - start))
+            fps = int((frame - start_frame + 1) / (time.time() - start))
             avg = np.mean(returns) if returns else 0.0
             print(f"frame {frame} ep {episode} eps {eps:.3f} avg100 {avg:.2f} fps {fps}")
             writer.add_scalar("charts/eps", eps, frame)
             writer.add_scalar("charts/fps", fps, frame)
 
+        if frame % args.ckpt_freq == 0:
+            tmp = ckpt_path + ".tmp"
+            torch.save({"q_net": q_net.state_dict(), "target_net": target_net.state_dict(),
+                        "optimizer": optimizer.state_dict(), "returns": list(returns),
+                        "episode": episode, "frame": frame}, tmp)
+            os.replace(tmp, ckpt_path)
+
     torch.save(q_net.state_dict(), f"runs/{run_name}/model.pt")
+    if os.path.exists(ckpt_path):
+        os.remove(ckpt_path)
     writer.close()
 
 
