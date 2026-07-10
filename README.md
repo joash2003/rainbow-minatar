@@ -35,27 +35,32 @@ Logs go to `runs/<name>`. View with `uv run tensorboard --logdir runs`.
 `uv run python aggregate.py` overlays each variant as a mean ± std band across
 seeds (`assets/learning_curves.png`).
 
-| Variant       | Breakout (3 seeds, 5M frames) | vs DQN |
-|---------------|-------------------------------|--------|
-| DQN           | 9.23 ± 0.13                   | —      |
-| + Double DQN  | 7.61 ± 0.57                   | -1.62  |
-| + Dueling     | 9.52 ± 0.74                   | +0.29  |
-| + PER         | 10.12 ± 0.71                  | +0.89  |
-| + C51         | 9.56 ± 0.83                   | +0.33  |
+| Variant       | Breakout (5M frames)    | vs DQN |
+|---------------|-------------------------|--------|
+| DQN           | 9.45 ± 0.50  (5 seeds)  | —      |
+| + Double DQN  | 7.61 ± 0.57  (3 seeds)  | -1.84  |
+| + Dueling     | 9.52 ± 0.74  (3 seeds)  | +0.07  |
+| + PER         | 9.61 ± 0.99  (5 seeds)  | +0.16  |
+| + C51         | 9.56 ± 0.83  (3 seeds)  | +0.11  |
 
 Each row adds one component to the DQN baseline in isolation (independent
 ablations, not cumulative). Values are the 100-episode average return at 5M
-frames, mean ± std over seeds 1–3.
+frames, mean ± std over seeds.
 
 **What each component contributed:**
 
-- **PER** (+0.89) is the only component whose gain clearly exceeds seed noise.
-- **Dueling** (+0.29) and **C51** (+0.33) are small positives, well within one
-  standard deviation of the baseline — not distinguishable from noise at 3 seeds.
-- **Double DQN** (-1.62) actually hurt. On MinAtar Breakout the overestimation that
-  Double DQN corrects isn't severe, so the decoupled target lookup mostly slows
-  value propagation here — a reminder that Rainbow components aren't universally
-  beneficial.
+- **Double DQN** (-1.84) clearly hurt: every DDQN seed finished below every DQN
+  seed. On MinAtar Breakout the overestimation it corrects isn't severe, so the
+  decoupled target lookup mostly slows value propagation — a reminder that
+  Rainbow components aren't universally beneficial.
+- **No component shows a gain beyond seed noise.** At 3 seeds PER looked like a
+  clear win (+0.89 against a deceptively tight ±0.13 baseline); two more seeds
+  of DQN and PER each killed the claim (+0.16 ± ~1σ). The first version of this
+  table over-claimed, and the replication is kept here deliberately: small-n
+  deep-RL comparisons on single environments are noise until proven otherwise.
+- Seeds 4–5 were run with fully seeded environment RNG (same-seed runs are
+  bit-identical); seeds 1–3 predate that fix. Both sample the same run
+  distribution, so they are pooled.
 
 Returns peak mid-training (~2.5–3.5M frames, ~13–15) then settle lower by 5M,
 driven by MinAtar's difficulty ramping plus the fixed ε = 0.1 floor; this affects
@@ -65,11 +70,12 @@ full curves.
 
 ## Roadmap
 
-- [x] DQN baseline — 9.23 ± 0.13
-- [x] Double DQN (`--double`) — 7.61 ± 0.57 (-1.62 vs DQN; hurts on this env)
-- [x] Dueling network (`--dueling`) — 9.52 ± 0.74 (+0.29; within noise)
-- [x] Prioritized experience replay (`--per`) — 10.12 ± 0.71 (+0.89; clearest gain)
-- [x] C51 (distributional) (`--c51`) — 9.56 ± 0.83 (+0.33; within noise)
+- [x] DQN baseline — 9.45 ± 0.50 (5 seeds)
+- [x] Double DQN (`--double`) — 7.61 ± 0.57 (-1.84 vs DQN; hurts on this env)
+- [x] Dueling network (`--dueling`) — 9.52 ± 0.74 (+0.07; within noise)
+- [x] Prioritized experience replay (`--per`) — 9.61 ± 0.99, 5 seeds (+0.16; the
+  n=3 "+0.89" did not survive replication)
+- [x] C51 (distributional) (`--c51`) — 9.56 ± 0.83 (+0.11; within noise)
 
 Each component is added on its own to the DQN baseline (independent ablations),
 evaluated over 3 seeds, and written up above.
